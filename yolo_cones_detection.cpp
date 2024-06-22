@@ -67,79 +67,88 @@ cv::Mat zero_tvec{0.0, 0.0, 0.0};
 bool showImg=true;
 int count_img = 15;
 
-//*********************************************************************************************************** */
-cv::Vec2i getConeTip(cv::Mat &image, cv::Vec3b coneColor, int height, int width);
-int getConteHorizontalCenter(cv::Mat &image, int colorAvg, int sampleHeight, int width);
-bool isValueNearCenter(int value, int center, int thresh);
+/*************************************************************************************************************/
+void colorMask(const cv::Mat& img,cv::Mat& outputImage){
+    int threshold = 40;
+    outputImage = cv::Mat::zeros(img.size(), CV_8UC1);
 
-int getAvg(cv::Vec3b triplet);
-const float HEIGHT_RATIO = 0.7;
+    // Iterate through each pixel
+    for (int y = 0; y < img.rows; y++) {
+        for (int x = 0; x < img.cols; x++) {
+            // Get the pixel's RGB values
+            cv::Vec3b pixel = img.at<cv::Vec3b>(y, x);
+            int B = pixel[0];
+            int G = pixel[1];
+            int R = pixel[2];
 
-cv::Vec2i getConeTip(cv::Mat &image, cv::Vec3b coneColor, int height, int width){
-    int sampleHeight = height*HEIGHT_RATIO;
-    cv::Vec3b bgrPixel;
-    int brgPixelAvg;
-    int colorAvg = getAvg(coneColor);
- 
-    cv::Vec2i coneTipPixel;
+            // Calculate the differences between RGB values
+            int diff1 = std::abs(R - G);
+            int diff2 = std::abs(G - B);
+            int diff3 = std::abs(B - R);
 
-    int horizontalCenter = getConteHorizontalCenter(image, colorAvg, sampleHeight, width);
+            // If any difference is greater than the threshold, set the mask pixel to white
+            if (diff1 > threshold || diff2 > threshold || diff3 > threshold) {
+                outputImage.at<uchar>(y, x) = 255;
+            }
+        }
+    }
+}
 
+cv::Vec2i getTopPoint(const cv::Mat& img){
+    cv::Vec2i tipVec(0, 0);
+    std::vector<cv::Point> topPoints;
+
+    // Iterate through the image from top to bottom
+    int y = 0;
+    bool foundTopPointInRow = false;
+    while (y < img.rows && !foundTopPointInRow) {
+        int x = 0;
+        while (x < img.cols) {
+            // Check if the current pixel is white (255)
+            if (img.at<uchar>(y, x) == 255) {
+                topPoints.push_back(cv::Point(x, y));
+                foundTopPointInRow = true;
+            }
+            x++;
+        }
+        y++;
+    }
+
+
+    // If no white pixels were found, return (0, 0)
+    if (topPoints.empty()) {
+        return tipVec;
+    }
+
+    // Calculate the mean of the collected top-most white pixels
+    int sumX = 0, sumY = 0;
+    for (const auto& point : topPoints) {
+        sumX += point.x;
+        sumY += point.y;
+    }
+    tipVec[0] = sumX / topPoints.size();
+    tipVec[1] = sumY / topPoints.size();
+
+    return tipVec;
+}
+
+cv::Vec2i getConeTip(const cv::Mat& img){
+    cv::Mat mask;
     
-    //first is width and then height
-    // cv::Point tip(horizontalCenter, sampleHeight);
-    // cv::circle(image, tip, 3, cv::Scalar(0, 0, 255), cv::FILLED);
-    // std::cout << "hor center: " << horizontalCenter << std::endl;
+    /* // Apply Gaussian blur to reduce noise and improve edge detection
+    cv::Mat blurred;
+    cv::GaussianBlur(mask, blurred, Size(5, 5), 1.5); */
 
-    for(int i=0; i < height; i++){
-        
-        brgPixelAvg = getAvg(image.at<cv::Vec3b>(i, horizontalCenter));
-        if(isValueNearCenter(brgPixelAvg, colorAvg, 40)){
-            coneTipPixel = cv::Vec2i(i,horizontalCenter);
-            std::cout << "width: " << coneTipPixel[1] << " " << "height: " << coneTipPixel[0] << std::endl;
-            return coneTipPixel;
-        }
-    }
+    colorMask(img,mask);
 
-    //std::cout << "not found any cone tip" << std::endl;
-    return cv::Vec2i(0,0);
-
+    cv::Vec2i topPoint = getTopPoint(mask);
+    return topPoint;
 }
 
-int getConteHorizontalCenter(cv::Mat &image, int colorAvg, int sampleHeight, int width){
-    cv::Vec2i firstConePixel = cv::Vec2i(0,0);
-    cv::Vec2i lastConePixel = cv::Vec2i(0,0);
-    int brgPixelAvg;
 
-    bool foundFirstConePixel = false; 
-    for(int i=0; i < width; i++){
-        
-        brgPixelAvg = getAvg(image.at<cv::Vec3b>(sampleHeight,i));
-        if(isValueNearCenter(brgPixelAvg, colorAvg, 30)  && !foundFirstConePixel){
-            firstConePixel = cv::Vec2i(sampleHeight,i);
-        }else if(isValueNearCenter(brgPixelAvg, colorAvg, 30)){
-            lastConePixel = cv::Vec2i(sampleHeight,i);
-        }
-    }
-    int horizontalCenter = static_cast<int> ((firstConePixel[1] + lastConePixel[1])/2);
 
-    return horizontalCenter;
+/**************************************************************************************************************/
 
-}
-
-bool isValueNearCenter(int value, int center, int thresh){
-
-    if(value > (center - thresh) && value < (center + thresh) )
-        return true;
-    else
-        return false;
-
-}
-
-int getAvg(cv::Vec3b triplet){
-    return static_cast<int>((triplet[0] + triplet[1] + triplet[2])/3);
-}
-//*************************************************************************************************** */
 
 
 
@@ -203,158 +212,7 @@ private:
         auto result_right = detector.Run(right_img, conf_thres, iou_thres);
     }
 
-
-//Segmentation by Canny thresholding (otsu's threshold) + mean value of top row
-    cv::Point segmentTopPoint(cv::Mat_<uchar> roi, int x, int y){
-
-        if (roi.channels() == 3) {
-            cv::cvtColor(roi, roi, cv::COLOR_RGB2GRAY);
-        }
-
-        //Otsu's threshold calculation
-        cv::Mat _img;
-        double otsu_thresh_val = cv::threshold(roi, _img, 0, 255, cv::THRESH_BINARY + cv::THRESH_OTSU);
-        double high_thresh_val  = otsu_thresh_val;
-        double lower_thresh_val = otsu_thresh_val * 0.5;
-
-        // Perform edge-based segmentation using Canny
-        cv::Mat edges;
-        cv::Canny(roi, edges, lower_thresh_val, high_thresh_val); 
-    
-        // Find the top pixel of the cone section
-        int min_y = roi.rows; // Initialize with max possible row value
-        std::vector<cv::Point> cone_pixels;
-
-        for (int y = 0; y < edges.rows; ++y) {
-            for (int x = 0; x < edges.cols; ++x) {
-                if (edges.at<uchar>(y, x) != 0) {
-                    cone_pixels.push_back(cv::Point(x, y));
-                    if (y < min_y) {
-                        min_y = y;
-                    }
-                }
-            }
-        }
-
-        cv::Point top_point;
-        // Calculate the mean value of the top pixels (if there are multiple top pixels)
-        if (!cone_pixels.empty()) {
-            int sum_x = 0;
-            int count = 0;
-            for (const auto& pt : cone_pixels) {
-                if (pt.y == min_y) {
-                    sum_x += pt.x;
-                    ++count;
-                }
-            }
-            int mean_x = sum_x / count;
-
-            // Calculate the top pixel coordinates relative to the original image
-            top_point = cv::Point(x + mean_x, y + min_y);
-            if(showImg==true){
-                cv::circle(roi, cv::Point(mean_x, min_y), 5, cv::Scalar(255, 0, 0), -1); // Draw a circle at the top point
-
-                cv::imshow("ROI", roi);   // Display the ROI
-                cv::imshow("Edges", edges); // Display the edges
-                cv::waitKey(0);
-                showImg=false;
-            }   
-        }
-
-        return top_point; 
-    }
-    /*
-    cv::Point segmentTopPoint(cv::Mat_<uchar> roi, int x, int y){
-        
-        if (roi.channels() == 3) {
-            cv::cvtColor(roi, roi, cv::COLOR_RGB2GRAY);
-        }
-
-        // Parameters for Harris corner detection
-        int blockSize = 2;
-        int apertureSize = 3;
-        double k = 0.04;
-
-        // Detecting corners
-        cv::Mat dst = cv::Mat::zeros(roi.size(), CV_32FC1);
-        cv::cornerHarris(roi, dst, blockSize, apertureSize, k);
-
-        // Normalizing
-        cv::Mat dst_norm, dst_norm_scaled;
-        cv::normalize(dst, dst_norm, 0, 255, cv::NORM_MINMAX, CV_32FC1, cv::Mat());
-        cv::convertScaleAbs(dst_norm, dst_norm_scaled);
-
-        // Thresholding to find the top corners
-        std::vector<cv::Point> corners;
-        double maxVal;
-        cv::minMaxLoc(dst_norm, nullptr, &maxVal);
-        double threshold = 0.01 * maxVal;  // Threshold to filter out strong corners
-
-        for (int j = 0; j < dst_norm.rows; j++) {
-            for (int i = 0; i < dst_norm.cols; i++) {
-                if (dst_norm.at<float>(j, i) > threshold) {
-                    corners.push_back(cv::Point(i, j));
-                }
-            }
-        }
-
-        // Sort the corners based on the y-coordinate (ascending order)
-        std::sort(corners.begin(), corners.end(), [](cv::Point a, cv::Point b) {
-            return a.y < b.y;
-        });
-
-        // Selecting the top two corners
-        if (corners.size() < 2) {
-            std::cerr << "Not enough corners found." << std::endl;
-            return cv::Point(-1, -1);  // Return an invalid point if not enough corners
-        }
-
-        cv::Point topCorner1 = corners[0];
-        cv::Point topCorner2 = corners[1];
-
-        // Draw the corners on the image
-        cv::circle(roi, topCorner1, 5, cv::Scalar(255), 2);
-        cv::circle(roi, topCorner2, 5, cv::Scalar(255), 2);
-
-        // Compute the mean of the top corners
-        cv::Point top_point((topCorner1.x + topCorner2.x) / 2, (topCorner1.y + topCorner2.y) / 2);
-
-        // Display the image with corners
-        if(showImg){
-        cv::imshow("Corners", roi);
-        cv::waitKey(0);
-        showImg=false;
-        }
-
-        return top_point; 
-    }*/
-
- /*    cv::Point segmentTopPoint(cv::Mat roi, int x, int y,int cone_class){
-        cv::Vec3b bgrYellowCones(117, 227, 246);
-        cv::Vec3b bgrBlueCones(227, 142, 79);
-
-        cv::Vec2b tipVecYellow = getConeTip(roi, bgrYellowCones, roi.rows, roi.cols);
-        cv::Vec2b tipVecBlue = getConeTip(roi, bgrBlueCones, roi.rows, roi.cols);
-
-        if(cone_class==0){
-            cv::Point tip(tipVecBlue[1]+x, tipVecBlue[0]+y);
-            
-            cv::circle(roi, tip, 5, cv::Scalar(255), 2);
-            /* if(showImg){cv::imshow("top_blue", roi);
-        cv::waitKey(0);
-        showImg=false;} 
-            return tip;
-        }
-        else{
-            cv::Point tip(tipVecYellow[1]+x, tipVecYellow[0]+y);
-            cv::circle(roi, tip, 5, cv::Scalar(255), 2);
-            /* if(showImg){cv::imshow("top_Yellow", roi);
-        cv::waitKey(0);
-        showImg=false;} 
-            return tip;
-        }
-
-    } */
+ 
 
 
 
@@ -400,10 +258,8 @@ private:
         std::vector<cv::Point3f> sparse_pts_to_reproj_big_orange; //index 3
         std::vector<cv::Point3f> sparse_pts_to_reproj_test; // try to reproject right centers in red
 
-        std::vector<cv::Point> top_points_left;
-        std::vector<cv::Point> top_points_right;
 
-        cv::Mat roi;
+        // cv::Mat roi;
 
       /*  for (auto r_det : result_right[0])
         {
@@ -422,7 +278,6 @@ private:
             //Extract the top point of the cone in the bounding box
             //cv::Point tp = segmentTopPoint(roi, (int) bb_tl.x, (int) bb_tl.y); 
             
-            //top_points_right.push_back(tp);
         //}
 */
 
@@ -440,7 +295,7 @@ private:
             bb_br_left.y += l_det.bbox.height;
 
             // Extract the region of interest (ROI) corresponding to the bounding box
-            roi = left_img_rgb(cv::Rect(lbb_tl, bb_br_left));
+            cv::Mat roi_l = left_img_rgb(cv::Rect(lbb_tl, bb_br_left));
             //cv::imwrite("/home/raceupdv/Desktop/images_test/roi.jpg", roi);
             /*
             if(count_img>0){
@@ -454,11 +309,7 @@ private:
                 cv::cvtColor(roi, roi, cv::COLOR_RGB2GRAY);
             } */
 
-            //Extract the top point of the cone in the bounding box
-            cv::Point tp_left = segmentTopPoint(roi, (int) lbb_tl.x, (int) lbb_tl.y); 
-            //cv::Point tp_left = segmentTopPoint(roi, (int) lbb_tl.x, (int) lbb_tl.y,l_det.class_idx); 
             
-            top_points_left.push_back(tp_left);
             //auto lbb_tl = l_det.bbox.tl(); // retrieve tl corner of left bb
             for (auto r_det : result_right[0])
             {
@@ -481,21 +332,21 @@ private:
                 bb_br_right.y += r_det.bbox.height;
 
                 // Extract the region of interest (ROI) corresponding to the bounding box
-                roi = right_img_rgb(cv::Rect(rbb_tl, bb_br_right));
+                cv::Mat roi_r = right_img_rgb(cv::Rect(rbb_tl, bb_br_right));
                 
 
-                //Extract the top point of the cone in the bounding box
-                cv::Point tp_right = segmentTopPoint(roi, (int) rbb_tl.x, (int) rbb_tl.y); 
-                //cv::Point tp_right = segmentTopPoint(roi, (int) rbb_tl.x, (int) rbb_tl.y,r_det.class_idx); 
                 
-                top_points_right.push_back(tp_right);
 
                 if (abs(rbb_tl.y - lbb_tl.y) <= EPIPOLAR_TOLERANCE && l_det.score > SCORE_THRESHOLD && r_det.class_idx == l_det.class_idx && l_det.bbox.height > 10)// 
                 {
                     // // compute the center of the bbox, to average the variance of the rectangle
                     //cv::Point l_center(lbb_tl.x + (l_det.bbox.width / 2.0), lbb_tl.y + l_det.bbox.height / 2.0);
                     //cv::Point r_center(rbb_tl.x + (r_det.bbox.width / 2.0), rbb_tl.y + r_det.bbox.height / 2.0);
+                    cv::Vec2i tp_right_vec = getConeTip(roi_r);
+                    cv::Point tp_right(tp_right_vec[0]+rbb_tl.x, tp_right_vec[1]+rbb_tl.y);
 
+                    cv::Vec2i tp_left_vec = getConeTip(roi_l);
+                    cv::Point tp_left(tp_left_vec[0]+lbb_tl.x, tp_left_vec[1]+lbb_tl.y);
 
                     // if (abs(lbb_tl.x - rbb_tl.x) < DISP_THRESHOLD)
                     if (abs(tp_left.x - tp_right.x) < DISP_THRESHOLD) //&& 
